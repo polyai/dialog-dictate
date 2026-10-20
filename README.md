@@ -18,7 +18,7 @@ You don't need to install Python yourself. uv takes care of it.
 **1. Install**
 
 ```sh
-uv tool install git+ssh://git@github.com/PolyAI-LDN/dialog-dictate
+uv tool install git+ssh://git@github.com/polyai/dialog-dictate
 ```
 
 If your terminal then says `dictate: command not found`, run `uv tool update-shell` and open a new terminal window.
@@ -103,7 +103,7 @@ dictate --debug                # show what's happening behind the scenes
 ## Contributing
 
 ```sh
-git clone git@github.com:PolyAI-LDN/dialog-dictate
+git clone git@github.com:polyai/dialog-dictate
 cd dialog-dictate
 uv tool install -e .   # `dictate` now runs your local copy; edits apply immediately
 ```
