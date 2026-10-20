@@ -1,0 +1,23 @@
+[project]
+name = "dialog-dictate"
+version = "0.1.0"
+description = "Push-to-talk dictation for macOS using PolyAI Dialog-RSN-1"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "sounddevice>=0.5",
+    "websockets>=14",  # additional_headers / InvalidStatus API
+    "pynput>=1.8",
+    "pyobjc-framework-Quartz>=10",
+    "pyobjc-framework-ApplicationServices>=10",
+]
+
+[project.scripts]
+dictate = "dictate:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["dictate"]
