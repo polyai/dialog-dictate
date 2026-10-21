@@ -185,3 +185,45 @@ def test_gesture_escape_cancels_hands_free():
     assert g.other_key(escape=True) == "cancel"
     c.t += 1
     assert g.press() == "start"
+
+
+def test_last_prints_the_saved_transcript(capsys, monkeypatch):
+    monkeypatch.setattr(dictate.sys, "platform", "linux")  # don't touch the real clipboard
+    assert dictate.last() == 1
+    dictate.write_private(dictate.last_path(), "hello world")
+    assert dictate.last_path().stat().st_mode & 0o777 == 0o600
+    assert dictate.last() == 0
+    assert capsys.readouterr().out == "hello world\n"
+
+
+def test_setup_keeps_saved_key_and_settings(monkeypatch):
+    dictate.save_config({"url": "wss://old", "hotkey": "alt_r"})
+    monkeypatch.setattr(dictate, "keychain_get", lambda: KEY)
+    monkeypatch.setattr(dictate, "keychain_set", lambda key: pytest.fail("key unchanged, shouldn't be re-saved"))
+    monkeypatch.setattr(dictate.getpass, "getpass", lambda prompt: "")
+
+    async def fake_find_region(key):
+        assert key == KEY
+        return dictate.REGIONS["us"]
+
+    monkeypatch.setattr(dictate, "find_region", fake_find_region)
+    monkeypatch.setattr(dictate.sys, "platform", "linux")  # skip the hotkey question
+    dictate.setup()
+    assert dictate.load_config() == {"region": "us", "hotkey": "alt_r"}
+
+
+def test_hotkey_defaults_to_right_command_and_allows_any_key():
+    assert dictate.hotkey_of({}) == "cmd_r"
+    assert dictate.hotkey_of({"hotkey": ""}) == "cmd_r"
+    assert dictate.hotkey_of({"hotkey": "f13"}) == "f13"
+    assert dictate.key_label("cmd_r") == "Right Command"
+    assert dictate.key_label("f13") == "f13"
+
+
+def test_key_id_names_special_keys_characters_and_codes():
+    from types import SimpleNamespace as K
+
+    assert dictate.key_id(K(name="cmd_r")) == "cmd_r"
+    assert dictate.key_id(K(char="§", vk=10)) == "§"
+    assert dictate.key_id(K(char=None, vk=63)) == "vk:63"
+    assert dictate.key_id(K(char=" ", vk=49)) == "vk:49"

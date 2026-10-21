@@ -1,12 +1,13 @@
 # Copyright (c) 2026 PolyAI Limited. All rights reserved.
 #
 # Push-to-talk dictation with PolyAI Dialog-RSN-1.
-# Hold Right Command, speak, then release to paste the transcript into the focused app.
-# Double-tap Right Command for hands-free mode and tap again to finish.
+# Hold Right Command (or the hotkey picked in setup), speak, then release to paste the
+# transcript into the focused app. Double-tap it for hands-free mode and tap again to finish.
 #
 #   dictate                # start listening for the hotkey
-#   dictate setup          # save your API key in the Keychain and find its region
+#   dictate setup          # save your API key, find its region and pick a hotkey
 #   dictate doctor         # check key, region, macOS permissions and microphone
+#   dictate last           # print the last transcript and copy it to the clipboard
 #   dictate --file x.wav   # transcribe an audio file
 #   dictate --debug        # log websocket events and timings to stderr
 #
@@ -37,10 +38,12 @@ except PackageNotFoundError:
     __version__ = "dev"
 
 # Keys only work against the region that issued them; anywhere else returns 401.
-# Self-serve keys from studio.poly.ai use "studio"; US enterprise keys (studio.us.poly.ai) use "us".
+# Self-serve keys use "studio"; enterprise keys use "us", "uk" or "eu".
 REGIONS = {
     "studio": "wss://api.studio.poly.ai/v1/realtime",
     "us": "wss://api.us.poly.ai/v1/realtime",
+    "uk": "wss://api.uk.poly.ai/v1/realtime",
+    "eu": "wss://api.eu.poly.ai/v1/realtime",
 }
 KEYCHAIN_SERVICE = "dialog-dictate"
 CONFIG_PATH = Path.home() / ".config" / "dialog-dictate" / "config.json"
@@ -48,6 +51,20 @@ RATE = 16000  # Dialog-RSN-1's native input rate, avoids server-side resampling
 MIN_SECONDS = 0.25  # shorter taps are treated as accidental
 DOUBLE_TAP_SECONDS = 0.4  # two taps this close together start hands-free mode
 TIMEOUT = 15  # seconds to wait for any single server reply
+RESTORE_SECONDS = 0.5  # time the focused app gets to read the pasted text before the old clipboard comes back
+DEFAULT_HOTKEY = "cmd_r"
+# Friendlier names for common hotkeys; any other key shows its config name (e.g. "f13")
+KEY_LABELS = {
+    "cmd_r": "Right Command",
+    "alt_r": "Right Option",
+    "ctrl_r": "Right Control",
+    "shift_r": "Right Shift",
+    "cmd": "Left Command",
+    "alt": "Left Option",
+    "ctrl": "Left Control",
+    "shift": "Left Shift",
+    "caps_lock": "Caps Lock",
+}
 DEBUG = bool(os.environ.get("DICTATE_DEBUG"))
 _ALLOW_LOCAL_WS = False  # tests only: lets the fake server run on ws://127.0.0.1
 T0 = time.monotonic()
@@ -94,11 +111,56 @@ def load_config() -> dict:
         return {}
 
 
-def save_config(data: dict):
-    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(CONFIG_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+def write_private(path: Path, text: str):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
-        f.write(json.dumps(data, indent=2) + "\n")
+        f.write(text)
+
+
+def save_config(data: dict):
+    write_private(CONFIG_PATH, json.dumps(data, indent=2) + "\n")
+
+
+def hotkey_of(cfg: dict) -> str:
+    h = cfg.get("hotkey")
+    return h if isinstance(h, str) and h else DEFAULT_HOTKEY
+
+
+def key_label(hotkey: str) -> str:
+    return KEY_LABELS.get(hotkey, hotkey)
+
+
+def key_id(k) -> str:
+    """Config name for a pynput key: a special key's name ("cmd_r", "f13"), a character, or "vk:<code>"."""
+    if name := getattr(k, "name", None):
+        return name
+    if k.char and k.char.isprintable() and not k.char.isspace():
+        return k.char
+    return f"vk:{k.vk}"
+
+
+def capture_key() -> str | None:
+    """Wait for the next key press and return its config name, or None if it was Enter."""
+    import termios
+
+    from pynput import keyboard
+
+    pressed = []
+
+    def on_press(k):
+        pressed.append(k)
+        return False  # stop listening
+
+    with keyboard.Listener(on_press=on_press) as listener:
+        listener.join()
+    if sys.stdin.isatty():
+        termios.tcflush(sys.stdin, termios.TCIFLUSH)  # drop the keystroke the terminal also received
+    return None if pressed[0] == keyboard.Key.enter else key_id(pressed[0])
+
+
+def last_path() -> Path:
+    return CONFIG_PATH.with_name("last.txt")
 
 
 def require_wss(url: str, source: str) -> str:
@@ -243,18 +305,40 @@ def transcribe_file(path: str, api_key: str | None = None, url: str | None = Non
 
 
 def setup():
-    print("You need a PolyAI API key from the API Keys tab of https://studio.poly.ai or https://studio.us.poly.ai.")
-    key = getpass.getpass("PolyAI API key (input hidden): ").strip()
+    cfg = load_config()
+    saved = keychain_get()
+    print("You need a PolyAI API key from the API Keys tab of Agent Studio.")
+    hint = ", Enter keeps the saved one" if saved else ""
+    key = getpass.getpass(f"PolyAI API key (input hidden{hint}): ").strip() or saved
     if not key:
         sys.exit("No key entered.")
     print("Checking which region issued this key...")
     url = asyncio.run(find_region(key))
     if not url:
         sys.exit("Every region rejected the key. Check it's a valid, active PolyAI API key.")
-    keychain_set(key)
-    save_config({"region": region_of(url)})
-    print(f"Saved key to Keychain (service '{KEYCHAIN_SERVICE}'), region: {region_of(url)}")
-    print("Run `dictate` to start.")
+    if key != saved:
+        keychain_set(key)
+    cfg.pop("url", None)  # v0.1 setting, replaced by region
+    cfg["region"] = region_of(url)
+    print(f"Key saved in Keychain (service '{KEYCHAIN_SERVICE}'), region: {region_of(url)}")
+
+    if sys.platform == "darwin":
+        import Quartz
+
+        current = key_label(hotkey_of(cfg))
+        if Quartz.CGPreflightListenEventAccess():
+            print(f"\nHotkey: press the key to hold while dictating (Enter keeps {current})...")
+            if hotkey := capture_key():
+                cfg["hotkey"] = hotkey
+            print(f"Hotkey: {key_label(hotkey_of(cfg))}")
+            if len(hotkey_of(cfg)) == 1:
+                print("Note: this key still types into the focused app. Modifiers or F13-F19 work best.")
+        else:
+            # Can't see key presses yet; they work after the first `dictate` run grants Input Monitoring
+            print(f"\nHotkey: {current}. Run `dictate setup` again after granting Input Monitoring to change it.")
+
+    save_config(cfg)
+    print("\nSaved. Run `dictate` to start.")
 
 
 def doctor() -> int:
@@ -283,6 +367,7 @@ def doctor() -> int:
         fix = "System Settings > Privacy & Security, turn it on for your terminal, then quit it with Cmd+Q"
         check(Quartz.CGPreflightListenEventAccess(), "Input Monitoring", fix)
         check(HIServices.AXIsProcessTrusted(), "Accessibility", fix)
+        print(f"      hotkey: {key_label(hotkey_of(load_config()))}")
         try:
             import sounddevice as sd
 
@@ -292,15 +377,51 @@ def doctor() -> int:
     return 0 if ok else 1
 
 
+def last() -> int:
+    try:
+        text = last_path().read_text()
+    except OSError:
+        print("Nothing dictated yet.", file=sys.stderr)
+        return 1
+    print(text)
+    if sys.platform == "darwin":
+        subprocess.run(["pbcopy"], input=text.encode(), check=True)
+        print("(copied to clipboard)", file=sys.stderr)
+    return 0
+
+
 def paste(text: str):
+    """Paste text into the frontmost app via the clipboard. Returns a function that puts the old clipboard back."""
     log("pasting", len(text), "chars")
+    from AppKit import NSPasteboard, NSPasteboardItem, NSPasteboardTypeString
     from pynput import keyboard
 
-    # Put text on the clipboard and send Cmd+V to the frontmost app
-    subprocess.run(["pbcopy"], input=text.encode(), check=True)
+    pb = NSPasteboard.generalPasteboard()
+    saved = [{t: item.dataForType_(t) for t in item.types()} for item in pb.pasteboardItems() or []]
+    # The transient marker asks clipboard managers not to keep a copy of every dictation
+    pb.declareTypes_owner_([NSPasteboardTypeString, "org.nspasteboard.TransientType"], None)
+    pb.setString_forType_(text, NSPasteboardTypeString)
+    pb.setString_forType_("", "org.nspasteboard.TransientType")
+    ours = pb.changeCount()
     kb = keyboard.Controller()
     with kb.pressed(keyboard.Key.cmd):
         kb.tap("v")
+
+    def restore():
+        if pb.changeCount() != ours:  # something else was copied since: keep it
+            return
+        pb.clearContents()
+        items = []
+        for types in saved:
+            item = NSPasteboardItem.alloc().init()
+            for t, data in types.items():
+                if data is not None:
+                    item.setData_forType_(data, t)
+            items.append(item)
+        if items:
+            pb.writeObjects_(items)
+
+    return restore
 
 
 # ---------------------------------------------------------------- on-screen indicator
@@ -459,7 +580,7 @@ class Indicator:
 
 
 class Gesture:
-    """Turns Right Command presses into actions.
+    """Turns hotkey presses into actions.
 
     Hold to talk, release to transcribe. Double-tap for hands-free, then tap again to
     finish; Esc cancels hands-free. Returns "start", "handsfree", "stop", "cancel" or None.
@@ -561,7 +682,10 @@ class Dictator:
                 self._show("hide")
         if text:
             print(f"→ {text!r} ({time.monotonic() - self.started:.1f}s)", flush=True)
-            paste(text + " ")
+            write_private(last_path(), text)  # for `dictate last` if the paste lands in the wrong place
+            restore = paste(text + " ")
+            await asyncio.sleep(RESTORE_SECONDS)
+            restore()
 
 
 async def hotkey_mode(url: str, key: str):
@@ -575,6 +699,8 @@ async def hotkey_mode(url: str, key: str):
     if not HIServices.AXIsProcessTrusted():
         print("[warn] terminal lacks Accessibility permission: transcripts won't paste (see `dictate doctor`)")
 
+    cfg = load_config()
+    hotkey = hotkey_of(cfg)
     loop = asyncio.get_running_loop()
     d = Dictator(loop, url, key, Indicator())
 
@@ -592,18 +718,25 @@ async def hotkey_mode(url: str, key: str):
         if action:
             loop.call_soon_threadsafe(actions[action])
 
+    held = False  # holding a non-modifier key auto-repeats its press events: only the first counts
+
     def on_press(k):
-        if k == keyboard.Key.cmd_r:
-            act(g.press())
+        nonlocal held
+        if key_id(k) == hotkey:
+            if not held:
+                held = True
+                act(g.press())
         else:
             act(g.other_key(escape=k == keyboard.Key.esc))
 
     def on_release(k):
-        if k == keyboard.Key.cmd_r:
+        nonlocal held
+        if key_id(k) == hotkey:
+            held = False
             act(g.release())
 
     keyboard.Listener(on_press=on_press, on_release=on_release).start()
-    print("Hold Right Command to dictate, or double-tap it for hands-free (tap again to stop). Ctrl+C to quit.")
+    print(f"Hold {key_label(hotkey)} to dictate, or double-tap it for hands-free (tap again to stop). Ctrl+C to quit.")
     await asyncio.Event().wait()
 
 
@@ -614,10 +747,11 @@ def main():
         description="Push-to-talk dictation with Dialog-RSN-1",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="commands:\n"
-        "  setup        save your API key and detect its region\n"
-        "  doctor       check your key, region, permissions and microphone",
+        "  setup        save your API key, detect its region and pick a hotkey\n"
+        "  doctor       check your key, region, permissions and microphone\n"
+        "  last         print the last transcript and copy it to the clipboard",
     )
-    p.add_argument("command", nargs="?", choices=["setup", "doctor"], help=argparse.SUPPRESS)
+    p.add_argument("command", nargs="?", choices=["setup", "doctor", "last"], help=argparse.SUPPRESS)
     p.add_argument("--file", help="transcribe an audio file and print the text")
     p.add_argument("--debug", action="store_true", help="log websocket events and timings to stderr")
     p.add_argument("--version", action="version", version=f"dictate {__version__}")
@@ -631,6 +765,8 @@ def main():
         return setup()
     if args.command == "doctor":
         sys.exit(doctor())
+    if args.command == "last":
+        sys.exit(last())
     if not args.file and sys.platform != "darwin":
         sys.exit("Hotkey mode needs macOS. `dictate --file x.wav` works anywhere.")
 
