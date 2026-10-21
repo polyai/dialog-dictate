@@ -17,7 +17,7 @@ main() {
   export PATH="$(uv tool dir --bin):$PATH"
   echo "==> Saving your API key"
   dictate setup </dev/tty || echo "Run \`dictate setup\` when you have a key."
-  echo "==> Done. Run \`dictate\`, hold Right Command and speak."
+  echo "==> Done. Run \`dictate\`, hold your hotkey and speak."
 }
 
 main "$@"

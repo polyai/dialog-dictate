@@ -10,7 +10,7 @@ While it's listening, a **Listening** pill appears at the bottom of the screen; 
 
 ## Try it in a minute
 
-1. Create an API key in the **API Keys** tab of [studio.poly.ai](https://studio.poly.ai) (self-serve) or [studio.us.poly.ai](https://studio.us.poly.ai) (US enterprise).
+1. Create an API key in the **API Keys** tab of Agent Studio.
 2. Install and paste your key when asked:
 
    ```sh
@@ -27,8 +27,9 @@ The first run asks macOS to give **your terminal app** Microphone, Input Monitor
 
 ```sh
 dictate                  # hold Right Command to dictate, or double-tap for hands-free
-dictate setup            # save your key in the Keychain and find its region
+dictate setup            # save your key, find its region and pick a hotkey
 dictate doctor           # check key, region, permissions and microphone
+dictate last             # print the last transcript and copy it to the clipboard
 dictate --file memo.wav  # transcribe a file (prints the text)
 dictate --debug          # show websocket events and timings
 ```
@@ -43,10 +44,11 @@ print(transcribe_file("memo.wav"))  # uses POLY_API_KEY or the key saved by `dic
 
 ## Good to know
 
-- **Your clipboard is replaced.** Text is pasted via the clipboard.
+- **Your clipboard is kept.** Text is pasted via the clipboard, then whatever you had copied is put back. If a paste lands in the wrong place, `dictate last` gets it back (the last transcript is kept in `~/.config/dialog-dictate/last.txt`).
+- **Pick another hotkey** by running `dictate setup` again and pressing the key you want. Any key works; modifiers or F13–F19 are best, since other keys still type into the focused app. Press Enter at the API key prompt to keep your saved key.
 - **Audio goes to PolyAI's API** in your key's region, using your key. See [limits and pricing](https://docs.poly.ai/api-reference/dialog-rsn-1/limits).
 - **Quick taps are ignored**, and pressing another key while holding Right Command (Cmd+Tab, say) cancels that recording.
-- **Keys belong to one host.** `dictate setup` finds yours: `studio` (self-serve keys from studio.poly.ai) or `us` (US enterprise keys from studio.us.poly.ai).
+- **Keys belong to one host.** `dictate setup` finds yours: `studio` (self-serve) or one of the `us`, `uk` and `eu` enterprise regions.
 - `POLY_API_KEY` and `DIALOG_REALTIME_URL` (must be `wss://`) override the saved key and region.
 - Update with `uv tool upgrade dialog-dictate`; remove with `uv tool uninstall dialog-dictate`.
 
