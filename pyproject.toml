@@ -1,17 +1,24 @@
 [project]
 name = "dialog-dictate"
-version = "0.2.0"
+version = "0.3.0"
 description = "Push-to-talk dictation for macOS using PolyAI Dialog-RSN-1"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 keywords = ["dictation", "speech-to-text", "push-to-talk", "macos", "polyai", "dialog-rsn-1"]
+# Exact pins, transitive included: `uv tool install` ignores uv.lock. Keep in step with it.
 dependencies = [
-    "websockets>=14,<18",  # additional_headers / InvalidStatus API
-    "sounddevice>=0.5; sys_platform == 'darwin'",
-    "pynput>=1.8; sys_platform == 'darwin'",
-    "pyobjc-framework-Quartz>=10; sys_platform == 'darwin'",
-    "pyobjc-framework-ApplicationServices>=10; sys_platform == 'darwin'",
-    "pyobjc-framework-Cocoa>=10; sys_platform == 'darwin'",  # on-screen indicator
+    "websockets==17.3",
+    "sounddevice==0.5.6; sys_platform == 'darwin'",
+    "pynput==1.8.2; sys_platform == 'darwin'",
+    "pyobjc-framework-Quartz==12.2.2; sys_platform == 'darwin'",
+    "pyobjc-framework-ApplicationServices==12.2.2; sys_platform == 'darwin'",
+    "pyobjc-framework-Cocoa==12.2.2; sys_platform == 'darwin'",  # on-screen indicator
+    # transitive
+    "pyobjc-core==12.2.2; sys_platform == 'darwin'",
+    "pyobjc-framework-CoreText==12.2.2; sys_platform == 'darwin'",
+    "cffi==2.1.1; sys_platform == 'darwin'",
+    "pycparser==3.11; sys_platform == 'darwin'",
+    "six==1.17.0; sys_platform == 'darwin'",
 ]
 
 [project.urls]
@@ -25,7 +32,7 @@ dictate = "dictate:main"
 dev = ["pytest>=8", "pytest-asyncio>=0.24", "ruff"]
 
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools==84.0.0"]  # pinned: installs build from source
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]

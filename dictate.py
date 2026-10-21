@@ -49,6 +49,8 @@ KEYCHAIN_SERVICE = "dialog-dictate"
 CONFIG_PATH = Path.home() / ".config" / "dialog-dictate" / "config.json"
 RATE = 16000  # Dialog-RSN-1's native input rate, avoids server-side resampling
 MIN_SECONDS = 0.25  # shorter taps are treated as accidental
+DEFAULT_MAX_MINUTES = 5  # recordings stop after this; caps held ones too, in case a key release is missed
+WATCH_SECONDS = 0.5  # how often a recording checks the time limit and the pill
 DOUBLE_TAP_SECONDS = 0.4  # two taps this close together start hands-free mode
 TIMEOUT = 15  # seconds to wait for any single server reply
 RESTORE_SECONDS = 0.5  # time the focused app gets to read the pasted text before the old clipboard comes back
@@ -125,6 +127,17 @@ def save_config(data: dict):
 def hotkey_of(cfg: dict) -> str:
     h = cfg.get("hotkey")
     return h if isinstance(h, str) and h else DEFAULT_HOTKEY
+
+
+def max_seconds_of(cfg: dict) -> float | None:
+    """Recording limit from DICTATE_MAX_MINUTES or the config's max_minutes; 0 means no limit."""
+    m = os.environ.get("DICTATE_MAX_MINUTES", cfg.get("max_minutes", DEFAULT_MAX_MINUTES))
+    try:
+        m = float(m)
+    except (TypeError, ValueError):
+        print(f"[warn] max_minutes must be a number; using {DEFAULT_MAX_MINUTES}", flush=True)
+        m = DEFAULT_MAX_MINUTES
+    return m * 60 if m > 0 else None
 
 
 def key_label(hotkey: str) -> str:
@@ -209,7 +222,7 @@ async def key_works(url: str, key: str) -> bool:
         if e.response.status_code in (401, 403):
             return False
         raise
-    except (OSError, asyncio.TimeoutError):
+    except (TimeoutError, OSError):
         return False
 
 
@@ -255,7 +268,7 @@ async def transcribe(chunks: asyncio.Queue, url: str, key: str) -> str:
             try:
                 # After response.done the transcript can still trail by a moment
                 event = await recv(ws, 3 if done else TIMEOUT)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 if done:
                     return ""
                 raise RuntimeError(f"no transcript after {TIMEOUT}s") from None
@@ -282,7 +295,9 @@ def read_audio(path: str) -> bytes:
         raise SystemExit("Need a 16 kHz mono 16-bit WAV (other formats convert only on macOS).")
     with tempfile.TemporaryDirectory() as tmp:
         out = os.path.join(tmp, "a.wav")
-        subprocess.run(["afconvert", "-f", "WAVE", "-d", f"LEI16@{RATE}", "-c", "1", path, out], check=True)
+        # Absolute, so a name starting with "-" can't be read as an afconvert option
+        src = os.path.abspath(path)
+        subprocess.run(["afconvert", "-f", "WAVE", "-d", f"LEI16@{RATE}", "-c", "1", src, out], check=True)
         with wave.open(out) as w:
             return w.readframes(w.getnframes())
 
@@ -569,6 +584,9 @@ class Indicator:
             log("indicator unavailable", e)
             self.proc = None
 
+    def alive(self) -> bool:
+        return self.proc is not None and self.proc.poll() is None
+
     def set(self, state: str):
         if not self.proc:
             return
@@ -623,14 +641,29 @@ class Gesture:
             self.handsfree = False
         return "cancel"
 
+    def reset(self):
+        """Forget any hold or hands-free in progress."""
+        self.down_at, self.handsfree, self.ignore_release = None, False, False
+
 
 class Dictator:
-    def __init__(self, loop: asyncio.AbstractEventLoop, url: str, key: str, indicator: Indicator | None = None):
+    def __init__(
+        self,
+        loop: asyncio.AbstractEventLoop,
+        url: str,
+        key: str,
+        indicator: Indicator | None = None,
+        on_auto_stop=None,
+        max_seconds: float | None = DEFAULT_MAX_MINUTES * 60,
+    ):
         self.loop, self.url, self.key = loop, url, key
+        self.max_seconds = max_seconds
         self.indicator = indicator
+        self.on_auto_stop = on_auto_stop  # called when a recording stops without the user asking
         self.queue: asyncio.Queue | None = None
         self.stream = None
         self.started = 0.0
+        self.handsfree = False
 
     def _show(self, state: str):
         if self.indicator:
@@ -644,6 +677,14 @@ class Dictator:
     def start(self, handsfree: bool = False):
         if self.stream:
             return
+        if handsfree and not (self.indicator and self.indicator.alive()):
+            # Once the key is let go, the pill is the only sign the mic is on
+            print(
+                "[warn] hands-free needs the on-screen indicator, which isn't running. Hold the key instead.",
+                flush=True,
+            )
+            self._auto_stop()
+            return
         import sounddevice as sd
 
         self.queue = asyncio.Queue()
@@ -654,8 +695,27 @@ class Dictator:
             samplerate=RATE, channels=1, dtype="int16", blocksize=RATE // 10, callback=self._on_audio
         )
         self.stream.start()
+        self.handsfree = handsfree
         self._show("free" if handsfree else "rec")
         print("● recording", flush=True)
+        self.loop.call_later(WATCH_SECONDS, self._watch, self.stream)
+
+    def _watch(self, stream):
+        if self.stream is not stream:  # stopped, or a newer recording has its own watch
+            return
+        if self.max_seconds and time.monotonic() - self.started >= self.max_seconds:
+            print(f"[warn] stopped recording after {self.max_seconds / 60:g} minutes (max_minutes)", flush=True)
+        elif self.handsfree and not (self.indicator and self.indicator.alive()):
+            print("[warn] on-screen indicator stopped: ending hands-free", flush=True)
+        else:
+            self.loop.call_later(WATCH_SECONDS, self._watch, stream)
+            return
+        self.stop()  # still transcribe what was said
+        self._auto_stop()
+
+    def _auto_stop(self):
+        if self.on_auto_stop:
+            self.on_auto_stop()
 
     def stop(self, cancel: bool = False):
         if not self.stream:
@@ -702,11 +762,10 @@ async def hotkey_mode(url: str, key: str):
     cfg = load_config()
     hotkey = hotkey_of(cfg)
     loop = asyncio.get_running_loop()
-    d = Dictator(loop, url, key, Indicator())
-
     # Keep the key callbacks instant: they run inside macOS's event tap, which the
     # OS disables if a callback blocks (opening the mic does). Do the work on the loop.
     g = Gesture()
+    d = Dictator(loop, url, key, Indicator(), on_auto_stop=g.reset, max_seconds=max_seconds_of(cfg))
     actions = {
         "start": lambda: d.start(),
         "handsfree": lambda: d.start(handsfree=True),

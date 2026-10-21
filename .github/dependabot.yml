@@ -1,0 +1,19 @@
+version: 2
+updates:
+  # A week's cooldown lets a compromised release get caught and yanked before we pick it up
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      # pyobjc packages require each other at matching versions, so bump them together
+      pyobjc:
+        patterns: ["pyobjc*"]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
