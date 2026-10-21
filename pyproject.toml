@@ -1,19 +1,28 @@
 [project]
 name = "dialog-dictate"
-version = "0.1.0"
+version = "0.2.0"
 description = "Push-to-talk dictation for macOS using PolyAI Dialog-RSN-1"
 readme = "README.md"
 requires-python = ">=3.10"
+keywords = ["dictation", "speech-to-text", "push-to-talk", "macos", "polyai", "dialog-rsn-1"]
 dependencies = [
-    "sounddevice>=0.5",
-    "websockets>=14",  # additional_headers / InvalidStatus API
-    "pynput>=1.8",
-    "pyobjc-framework-Quartz>=10",
-    "pyobjc-framework-ApplicationServices>=10",
+    "websockets>=14,<18",  # additional_headers / InvalidStatus API
+    "sounddevice>=0.5; sys_platform == 'darwin'",
+    "pynput>=1.8; sys_platform == 'darwin'",
+    "pyobjc-framework-Quartz>=10; sys_platform == 'darwin'",
+    "pyobjc-framework-ApplicationServices>=10; sys_platform == 'darwin'",
+    "pyobjc-framework-Cocoa>=10; sys_platform == 'darwin'",  # on-screen indicator
 ]
+
+[project.urls]
+Repository = "https://github.com/polyai/dialog-dictate"
+Documentation = "https://docs.poly.ai/api-reference/dialog-rsn-1/reference"
 
 [project.scripts]
 dictate = "dictate:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "pytest-asyncio>=0.24", "ruff"]
 
 [build-system]
 requires = ["setuptools>=68"]
@@ -21,3 +30,12 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 py-modules = ["dictate"]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
