@@ -1,16 +1,18 @@
-# Push-to-talk dictation using PolyAI Dialog-RSN-1 for transcription.
-# Hold Right Command, speak, release: the transcript is pasted into the focused app.
-# Or double-tap Right Command to talk hands-free, and tap it again to finish.
+# Copyright (c) 2026 PolyAI Limited. All rights reserved.
 #
-#   dictate setup          # store your API key in the Keychain and detect its region
-#   dictate                # hotkey mode
-#   dictate doctor         # check key, region and macOS permissions
+# Push-to-talk dictation with PolyAI Dialog-RSN-1.
+# Hold Right Command, speak, then release to paste the transcript into the focused app.
+# Double-tap Right Command for hands-free mode and tap again to finish.
+#
+#   dictate                # start listening for the hotkey
+#   dictate setup          # save your API key in the Keychain and find its region
+#   dictate doctor         # check key, region, macOS permissions and microphone
 #   dictate --file x.wav   # transcribe an audio file
 #   dictate --debug        # log websocket events and timings to stderr
 #
 # Python:  from dictate import transcribe_file; print(transcribe_file("x.wav"))
 #
-# POLY_API_KEY and DIALOG_REALTIME_URL env vars override the stored key and region.
+# POLY_API_KEY and DIALOG_REALTIME_URL override the saved key and region.
 from __future__ import annotations
 
 import argparse
@@ -117,7 +119,7 @@ def resolve(api_key: str | None = None, url: str | None = None) -> tuple[str, st
     cfg = load_config()
     if cfg.get("region") in REGIONS:
         return REGIONS[cfg["region"]], key
-    if isinstance(cfg.get("url"), str):  # written by v0.1
+    if isinstance(cfg.get("url"), str):  # config saved by v0.1
         return require_wss(cfg["url"], f"The url in {CONFIG_PATH}"), key
     return REGIONS["studio"], key
 
@@ -240,18 +242,15 @@ def transcribe_file(path: str, api_key: str | None = None, url: str | None = Non
 # ---------------------------------------------------------------- commands
 
 
-def setup(region: str | None):
+def setup():
     print("You need a PolyAI API key from the API Keys tab of https://studio.poly.ai or https://studio.us.poly.ai.")
     key = getpass.getpass("PolyAI API key (input hidden): ").strip()
     if not key:
         sys.exit("No key entered.")
-    if region:
-        url = REGIONS[region]
-    else:
-        print("Checking which region issued this key...")
-        url = asyncio.run(find_region(key))
-        if not url:
-            sys.exit("Every region rejected the key. Check it's a valid, active PolyAI API key.")
+    print("Checking which region issued this key...")
+    url = asyncio.run(find_region(key))
+    if not url:
+        sys.exit("Every region rejected the key. Check it's a valid, active PolyAI API key.")
     keychain_set(key)
     save_config({"region": region_of(url)})
     print(f"Saved key to Keychain (service '{KEYCHAIN_SERVICE}'), region: {region_of(url)}")
@@ -420,7 +419,7 @@ def run_indicator():
         was_hidden = current["state"] == "hide"
         current["state"] = state
         render()
-        frame = AppKit.NSScreen.mainScreen().visibleFrame()  # the screen you're working on
+        frame = AppKit.NSScreen.mainScreen().visibleFrame()  # screen with the focused window
         x = frame.origin.x + (frame.size.width - panel.frame().size.width) / 2
         panel.setFrameOrigin_((round(x), frame.origin.y + 80))
         if was_hidden:
@@ -431,7 +430,7 @@ def run_indicator():
     def read_commands():
         for line in sys.stdin:
             AppHelper.callAfter(show, line.strip())
-        AppHelper.callAfter(AppHelper.stopEventLoop)  # dictate exited
+        AppHelper.callAfter(AppHelper.stopEventLoop)  # stdin closed: dictate has exited
 
     threading.Thread(target=read_commands, daemon=True).start()
     AppHelper.runEventLoop(installInterrupt=True)
@@ -586,7 +585,7 @@ async def hotkey_mode(url: str, key: str):
         "start": lambda: d.start(),
         "handsfree": lambda: d.start(handsfree=True),
         "stop": lambda: d.stop(),
-        "cancel": lambda: d.stop(True),  # another key while holding (Cmd+Tab, etc.): not dictation
+        "cancel": lambda: d.stop(True),  # another key pressed while holding (e.g. Cmd+Tab)
     }
 
     def act(action: str | None):
@@ -610,20 +609,26 @@ async def hotkey_mode(url: str, key: str):
 
 def main():
     global DEBUG
-    p = argparse.ArgumentParser(prog="dictate", description="Push-to-talk dictation with Dialog-RSN-1")
-    p.add_argument("command", nargs="?", choices=["run", "setup", "doctor"], default="run")
-    p.add_argument("--file", help="transcribe an audio file instead of listening")
-    p.add_argument("--region", choices=REGIONS, help="setup: skip region detection")
-    p.add_argument("--debug", action="store_true", help="log websocket events and timings")
+    p = argparse.ArgumentParser(
+        prog="dictate",
+        description="Push-to-talk dictation with Dialog-RSN-1",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="commands:\n"
+        "  setup        save your API key and detect its region\n"
+        "  doctor       check your key, region, permissions and microphone",
+    )
+    p.add_argument("command", nargs="?", choices=["setup", "doctor"], help=argparse.SUPPRESS)
+    p.add_argument("--file", help="transcribe an audio file and print the text")
+    p.add_argument("--debug", action="store_true", help="log websocket events and timings to stderr")
     p.add_argument("--version", action="version", version=f"dictate {__version__}")
-    p.add_argument("--indicator", action="store_true", help=argparse.SUPPRESS)  # internal: the on-screen pill
+    p.add_argument("--indicator", action="store_true", help=argparse.SUPPRESS)  # runs the on-screen pill process
     args = p.parse_args()
     DEBUG = DEBUG or args.debug
 
     if args.indicator:
         return run_indicator()
     if args.command == "setup":
-        return setup(args.region)
+        return setup()
     if args.command == "doctor":
         sys.exit(doctor())
     if not args.file and sys.platform != "darwin":

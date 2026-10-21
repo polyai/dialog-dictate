@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Copyright (c) 2026 PolyAI Limited. All rights reserved.
 # Install dialog-dictate on macOS:
 #   curl -LsSf https://raw.githubusercontent.com/polyai/dialog-dictate/main/scripts/install.sh | bash
 set -euo pipefail
