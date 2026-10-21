@@ -1,109 +1,62 @@
 # dialog-dictate
 
-Push-to-talk dictation for macOS, powered by PolyAI's Dialog-RSN-1.
+Push-to-talk dictation for macOS, powered by [PolyAI Dialog-RSN-1](https://docs.poly.ai/api-reference/dialog-rsn-1/reference).
 
-Hold **Right Option** (⌥ on the right of the space bar), speak, then release. Your words are typed into whatever app you're using: Slack, Chrome, your editor, anywhere you can paste.
+Hold **Right Command**, speak, let go. Your words are pasted wherever your cursor is.
 
-## What you need
+For longer dictation, **double-tap Right Command** to go hands-free, then tap it once more to finish (Esc cancels).
 
-- A Mac
-- Your own PolyAI API key
-- [uv](https://docs.astral.sh/uv/), a Python tool installer. If you don't have it, run `brew install uv`.
-- Access to this GitHub repo
+While it's listening, a **Listening** pill appears at the bottom of the screen; it switches to **Transcribing…** when you let go and disappears once the text is pasted.
 
-You don't need to install Python yourself. uv takes care of it.
+## Try it in a minute
 
-## Setup
+1. Create an API key in the **API Keys** tab of [studio.poly.ai](https://studio.poly.ai) (self-serve) or [studio.us.poly.ai](https://studio.us.poly.ai) (US enterprise).
+2. Install and paste your key when asked:
 
-**1. Install**
+   ```sh
+   curl -LsSf https://raw.githubusercontent.com/polyai/dialog-dictate/main/scripts/install.sh | bash
+   ```
 
-```sh
-uv tool install git+ssh://git@github.com/polyai/dialog-dictate
-```
+   Or by hand: `uv tool install git+https://github.com/polyai/dialog-dictate && dictate setup` (get uv with `brew install uv`).
 
-If your terminal then says `dictate: command not found`, run `uv tool update-shell` and open a new terminal window.
+3. Run `dictate`, hold Right Command and talk. Ctrl+C stops it.
 
-**2. Add your API key**
+The first run asks macOS to give **your terminal app** Microphone, Input Monitoring and Accessibility. Allow them in System Settings > Privacy & Security, then **quit the terminal with Cmd+Q and reopen it**. If something doesn't work, run `dictate doctor`.
 
-```sh
-dictate setup
-```
-
-Paste your key when asked. It won't be shown as you type. Setup checks the key, works out which region it belongs to, and saves it securely in your Mac's Keychain. You only do this once.
-
-**3. Start dictating**
+## Commands
 
 ```sh
-dictate
+dictate                  # hold Right Command to dictate, or double-tap for hands-free
+dictate setup            # save your key in the Keychain and find its region
+dictate doctor           # check key, region, permissions and microphone
+dictate --file memo.wav  # transcribe a file (prints the text)
+dictate --debug          # show websocket events and timings
 ```
 
-Leave this running in a terminal window. Hold Right Option, speak, release, and the text appears where your cursor is. Press Ctrl+C in the terminal to stop.
+From Python:
 
-**4. Grant permissions (first run only)**
+```python
+from dictate import transcribe_file
 
-macOS will ask for some permissions the first time. They're granted to **your terminal app** (Terminal, iTerm, Warp, Ghostty, etc.), not to `dictate` itself. If you miss a prompt, turn them on manually in **System Settings → Privacy & Security**:
-
-| Permission       | What it's for                    | If it's missing                                  |
-|------------------|----------------------------------|--------------------------------------------------|
-| Microphone       | Hearing you                      | Transcripts come back empty                      |
-| Input Monitoring | Noticing when you hold the key   | Nothing happens when you hold Right Option       |
-| Accessibility    | Pasting the text into your app   | Text is copied but never appears                 |
-
-**Quit and reopen your terminal after changing these**, because macOS only applies them on restart. `dictate` warns you at startup if Input Monitoring or Accessibility is missing.
+print(transcribe_file("memo.wav"))  # uses POLY_API_KEY or the key saved by `dictate setup`
+```
 
 ## Good to know
 
-- **Your clipboard is replaced.** Dictated text is pasted via the clipboard, so whatever you'd copied before is overwritten.
-- **Audio is sent to PolyAI's API** for transcription, using your own key.
-- **Updating:** `uv tool upgrade dialog-dictate`
-- **Uninstalling:** `uv tool uninstall dialog-dictate`. Your saved key stays in Keychain (under `dialog-dictate`) until you delete it in Keychain Access.
+- **Your clipboard is replaced.** Text is pasted via the clipboard.
+- **Audio goes to PolyAI's API** in your key's region, using your key. See [limits and pricing](https://docs.poly.ai/api-reference/dialog-rsn-1/limits).
+- **Quick taps are ignored**, and pressing another key while holding Right Command (Cmd+Tab, say) cancels that recording.
+- **Keys belong to one host.** `dictate setup` finds yours: `studio` (self-serve keys from studio.poly.ai) or `us` (US enterprise keys from studio.us.poly.ai).
+- `POLY_API_KEY` and `DIALOG_REALTIME_URL` (must be `wss://`) override the saved key and region.
+- Update with `uv tool upgrade dialog-dictate`; remove with `uv tool uninstall dialog-dictate`.
 
-## API keys and regions
-
-Everyone uses their own key. Please don't share keys or paste them into Slack.
-
-Each key belongs to one PolyAI region and only works there. You don't need to know which region yours is: `dictate setup` works it out for you. If your key is rotated or revoked, `dictate` will tell you; just run `dictate setup` again.
-
-<details>
-<summary>Details for the curious</summary>
-
-- The key is stored in your login Keychain under the service `dialog-dictate`.
-- The detected region is saved in `~/.config/dialog-dictate/config.json`.
-- Setup tries each known endpoint and keeps the first one that accepts your key:
-
-  | Region   | Endpoint                               |
-  |----------|----------------------------------------|
-  | `studio` | `wss://api.studio.poly.ai/v1/realtime` |
-  | `us`     | `wss://api.us.poly.ai/v1/realtime`     |
-
-- The `POLY_API_KEY` and `DIALOG_REALTIME_URL` environment variables override the saved key and region. To use an endpoint not listed above, run `DIALOG_REALTIME_URL=wss://... dictate setup`.
-
-</details>
-
-## Troubleshooting
-
-| Problem                                 | Fix                                                                                                  |
-|-----------------------------------------|------------------------------------------------------------------------------------------------------|
-| `dictate: command not found`            | Run `uv tool update-shell`, then open a new terminal window.                                         |
-| "No API key found"                      | Run `dictate setup`.                                                                                 |
-| "Key rejected"                          | Your key has changed or was revoked. Run `dictate setup` with a current key.                         |
-| Nothing happens when holding the key    | Check Input Monitoring for your terminal app, then quit and reopen the terminal.                     |
-| Text doesn't appear after speaking      | Check Accessibility for your terminal app, then quit and reopen the terminal.                        |
-| Transcripts are empty                   | Check Microphone for your terminal app, and that the right input is selected in Sound settings.      |
-
-Still stuck? Run `dictate --debug` and share the output with whoever maintains this repo. Debug mode logs every key you press, so **don't type passwords while it's on**, and check the output before sharing it.
-
-## Other options
+## Development
 
 ```sh
-dictate --file recording.wav   # transcribe a WAV file (16 kHz, mono, 16-bit)
-dictate --debug                # show what's happening behind the scenes
+git clone https://github.com/polyai/dialog-dictate && cd dialog-dictate
+uv run pytest            # tests use a fake local server: no mic, key or network
+uv run ruff check . && uv run ruff format --check .
+uv tool install -e .     # `dictate` now runs your checkout
 ```
 
-## Contributing
-
-```sh
-git clone git@github.com:polyai/dialog-dictate
-cd dialog-dictate
-uv tool install -e .   # `dictate` now runs your local copy; edits apply immediately
-```
+Everything lives in `dictate.py`. Please keep it that way: small and easy to read.
