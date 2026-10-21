@@ -323,7 +323,7 @@ def run_indicator():
     app = AppKit.NSApplication.sharedApplication()
     app.setActivationPolicy_(AppKit.NSApplicationActivationPolicyAccessory)  # no Dock icon
 
-    h, pad = 40, 20
+    h, pad, dot, gap = 36, 16, 8, 8
     panel = AppKit.NSPanel.alloc().initWithContentRect_styleMask_backing_defer_(
         ((0, 0), (200, h)),
         AppKit.NSWindowStyleMaskBorderless | AppKit.NSWindowStyleMaskNonactivatingPanel,
@@ -340,62 +340,93 @@ def run_indicator():
         | AppKit.NSWindowCollectionBehaviorFullScreenAuxiliary
         | AppKit.NSWindowCollectionBehaviorStationary
     )
+
+    def rgb(hex_: int, alpha: float = 1.0):
+        return AppKit.NSColor.colorWithSRGBRed_green_blue_alpha_(
+            (hex_ >> 16) / 255, ((hex_ >> 8) & 0xFF) / 255, (hex_ & 0xFF) / 255, alpha
+        )
+
+    # PolyAI colours: grey-100 (#161617) pill with a faint edge, brand-50 (#D9EE50) dot while listening
     view = panel.contentView()
     view.setWantsLayer_(True)
     view.layer().setCornerRadius_(h / 2)
-    view.layer().setBackgroundColor_(Quartz.CGColorCreateGenericGray(0.08, 0.88))
+    view.layer().setBackgroundColor_(rgb(0x161617, 0.94).CGColor())
+    view.layer().setBorderWidth_(1)
+    view.layer().setBorderColor_(rgb(0xFFFFFF, 0.08).CGColor())
+
+    # The dot is its own layer rather than a "●" glyph, so it sits dead centre whatever the font
+    dot_layer = Quartz.CALayer.layer()
+    dot_layer.setCornerRadius_(dot / 2)
+    dot_layer.setFrame_(((pad, (h - dot) / 2), (dot, dot)))
+    view.layer().addSublayer_(dot_layer)
     label = AppKit.NSTextField.labelWithString_("")
     view.addSubview_(label)
 
-    font = AppKit.NSFont.systemFontOfSize_weight_(14, AppKit.NSFontWeightMedium)
-    red = AppKit.NSColor.systemRedColor()
-    states = {
-        "rec": (red, "Listening"),
-        "free": (red, "Hands-free · tap ⌘ to stop"),
-        "busy": (AppKit.NSColor.systemGrayColor(), "Transcribing…"),
+    # Brand typeface if installed, else the system font
+    font = AppKit.NSFont.fontWithName_size_("Proxima Nova Semibold", 14) or AppKit.NSFont.systemFontOfSize_weight_(
+        14, AppKit.NSFontWeightMedium
+    )
+    label.setFont_(font)
+    label.setTextColor_(rgb(0xF5F5F5))
+
+    brand = rgb(0xD9EE50)
+    states = {  # state: (dot colour, text, pulse)
+        "rec": (brand, "Listening", True),
+        "free": (brand, "Hands-free · tap ⌘ to stop", True),
+        "busy": (rgb(0x858589), "Transcribing…", False),
     }
-    current = {"state": "hide", "dim": False}
+    current = {"state": "hide"}
 
     def render():
-        color, text = states[current["state"]]
-        if current["dim"]:
-            color = color.colorWithAlphaComponent_(0.3)
-        s = AppKit.NSMutableAttributedString.alloc().initWithString_attributes_(
-            "● ", {AppKit.NSForegroundColorAttributeName: color, AppKit.NSFontAttributeName: font}
-        )
-        s.appendAttributedString_(
-            AppKit.NSAttributedString.alloc().initWithString_attributes_(
-                text,
-                {AppKit.NSForegroundColorAttributeName: AppKit.NSColor.whiteColor(), AppKit.NSFontAttributeName: font},
+        color, text, pulse = states[current["state"]]
+        dot_layer.setBackgroundColor_(color.CGColor())
+        dot_layer.removeAllAnimations()
+        if pulse:  # breathe rather than blink
+            anim = Quartz.CABasicAnimation.animationWithKeyPath_("opacity")
+            anim.setFromValue_(1.0)
+            anim.setToValue_(0.3)
+            anim.setDuration_(0.7)
+            anim.setAutoreverses_(True)
+            anim.setRepeatCount_(float("inf"))
+            anim.setTimingFunction_(
+                Quartz.CAMediaTimingFunction.functionWithName_(Quartz.kCAMediaTimingFunctionEaseInEaseOut)
             )
-        )
-        label.setAttributedStringValue_(s)
-        # Size the label to its text, fit the pill around it and centre the text both ways
+            dot_layer.addAnimation_forKey_(anim, "pulse")
+        label.setStringValue_(text)
         label.sizeToFit()
         lw, lh = label.frame().size.width, label.frame().size.height
-        pw = round(lw + 2 * pad)
+        # NSTextField pads its text a little on each side; measure the glyphs themselves
+        inset = (lw - label.attributedStringValue().size().width) / 2
+        pw = round(pad + dot + gap + (lw - 2 * inset) + pad)
         if panel.frame().size.width != pw:
             panel.setContentSize_((pw, h))
-        label.setFrameOrigin_(((pw - lw) / 2, (h - lh) / 2))
+        # Centre the capitals on the pill, not the line box (which includes descender space)
+        baseline = (h - font.capHeight()) / 2
+        label.setFrameOrigin_((pad + dot + gap - inset, baseline - (lh - label.firstBaselineOffsetFromTop())))
+
+    def fade(alpha: float, done=None):
+        def animate(ctx):
+            ctx.setDuration_(0.15)
+            panel.animator().setAlphaValue_(alpha)
+
+        AppKit.NSAnimationContext.runAnimationGroup_completionHandler_(animate, done)
 
     def show(state: str):
         if state not in states:
             current["state"] = "hide"
-            panel.orderOut_(None)
+            # Only order out if nothing re-showed the pill while it was fading
+            fade(0.0, lambda: current["state"] == "hide" and panel.orderOut_(None))
             return
-        current["state"], current["dim"] = state, False
+        was_hidden = current["state"] == "hide"
+        current["state"] = state
         render()
         frame = AppKit.NSScreen.mainScreen().visibleFrame()  # the screen you're working on
         x = frame.origin.x + (frame.size.width - panel.frame().size.width) / 2
-        panel.setFrameOrigin_((x, frame.origin.y + 80))
+        panel.setFrameOrigin_((round(x), frame.origin.y + 80))
+        if was_hidden:
+            panel.setAlphaValue_(0.0)
         panel.orderFrontRegardless()
-
-    def pulse(_timer):
-        if current["state"] == "rec":
-            current["dim"] = not current["dim"]
-            render()
-
-    AppKit.NSTimer.scheduledTimerWithTimeInterval_repeats_block_(0.5, True, pulse)
+        fade(1.0)
 
     def read_commands():
         for line in sys.stdin:
