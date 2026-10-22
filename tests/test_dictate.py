@@ -3,6 +3,8 @@
 import asyncio
 import base64
 import json
+import re
+from pathlib import Path
 
 import pytest
 from websockets.asyncio.server import serve
@@ -227,3 +229,198 @@ def test_key_id_names_special_keys_characters_and_codes():
     assert dictate.key_id(K(char="§", vk=10)) == "§"
     assert dictate.key_id(K(char=None, vk=63)) == "vk:63"
     assert dictate.key_id(K(char=" ", vk=49)) == "vk:49"
+
+
+def test_gesture_reset_after_auto_stop_starts_afresh():
+    c = FakeClock()
+    g = dictate.Gesture(c)
+    g.press()
+    c.t += 0.1
+    g.release()
+    c.t += 0.1
+    assert g.press() == "handsfree"
+    g.reset()  # the recording stopped itself
+    assert g.release() == "stop"  # harmless: nothing is recording
+    c.t += 1
+    assert g.press() == "start"
+
+
+def test_read_audio_passes_an_absolute_path_to_afconvert(tmp_path, monkeypatch):
+    import wave
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "-o.m4a").write_bytes(b"not a wav")
+    seen = []
+
+    def fake_run(cmd, check):
+        seen.append(cmd)
+        with wave.open(cmd[-1], "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(dictate.RATE)
+            w.writeframes(ONE_SECOND)
+
+    monkeypatch.setattr(dictate.sys, "platform", "darwin")
+    monkeypatch.setattr(dictate.subprocess, "run", fake_run)
+    assert dictate.read_audio("-o.m4a") == ONE_SECOND
+    assert seen[0][-2] == str(tmp_path / "-o.m4a")
+
+
+class FakeStream:
+    def __init__(self, **kwargs):
+        self.open = False
+
+    def start(self):
+        self.open = True
+
+    def stop(self):
+        self.open = False
+
+    def close(self):
+        pass
+
+
+class FakeIndicator:
+    def __init__(self, up=True):
+        self.up = up
+        self.states = []
+
+    def alive(self):
+        return self.up
+
+    def set(self, state):
+        self.states.append(state)
+
+
+@pytest.fixture
+async def dictator(monkeypatch):
+    """A Dictator with a fake mic and no server: returns (dictator, indicator, auto-stop count)."""
+    import types
+
+    monkeypatch.setitem(dictate.sys.modules, "sounddevice", types.SimpleNamespace(RawInputStream=FakeStream))
+    monkeypatch.setattr(dictate, "WATCH_SECONDS", 0.01)
+
+    async def fake_transcribe(queue, url, key):
+        while (chunk := await queue.get()) is not None:
+            if chunk is dictate.CANCEL:
+                return ""
+        return ""
+
+    monkeypatch.setattr(dictate, "transcribe", fake_transcribe)
+    stops = []
+    ind = FakeIndicator()
+    d = dictate.Dictator(asyncio.get_running_loop(), "wss://x", KEY, ind, on_auto_stop=lambda: stops.append(1))
+    return d, ind, stops
+
+
+async def test_recording_stops_itself_at_the_time_limit(dictator):
+    d, ind, stops = dictator
+    d.max_seconds = dictate.MIN_SECONDS + 0.05  # long enough not to count as a tap
+    d.start(handsfree=True)
+    await asyncio.sleep(dictate.MIN_SECONDS + 0.2)
+    assert d.stream is None
+    assert "busy" in ind.states  # transcribed, not cancelled
+    assert stops == [1]
+
+
+async def test_no_time_limit_when_max_minutes_is_zero(dictator):
+    d, ind, stops = dictator
+    d.max_seconds = None
+    d.start(handsfree=True)
+    await asyncio.sleep(0.05)
+    assert d.stream is not None
+    d.stop()
+
+
+@pytest.mark.parametrize(
+    "cfg, env, expected",
+    [
+        ({}, None, 300),
+        ({"max_minutes": 30}, None, 1800),
+        ({"max_minutes": 0}, None, None),
+        ({"max_minutes": 30}, "2", 120),
+        ({"max_minutes": "lots"}, None, 300),
+        ({"max_minutes": -1}, None, 300),
+        ({"max_minutes": "nan"}, None, 300),
+    ],
+)
+def test_max_seconds_of(cfg, env, expected, monkeypatch):
+    if env is None:
+        monkeypatch.delenv("DICTATE_MAX_MINUTES", raising=False)
+    else:
+        monkeypatch.setenv("DICTATE_MAX_MINUTES", env)
+    assert dictate.max_seconds_of(cfg) == expected
+
+
+async def test_hands_free_ends_if_the_indicator_dies(dictator):
+    d, ind, stops = dictator
+    d.start(handsfree=True)
+    await asyncio.sleep(0.05)
+    assert d.stream is not None
+    ind.up = False
+    await asyncio.sleep(0.05)
+    assert d.stream is None
+    assert stops == [1]
+
+
+async def test_hands_free_refuses_to_start_without_the_indicator(dictator):
+    d, ind, stops = dictator
+    ind.up = False
+    d.start(handsfree=True)
+    assert d.stream is None
+    assert stops == [1]
+
+
+async def test_hold_to_talk_carries_on_without_the_indicator(dictator):
+    d, ind, stops = dictator
+    ind.up = False
+    d.start()
+    await asyncio.sleep(0.05)
+    assert d.stream is not None
+    d.stop()
+    assert stops == []
+
+
+def _pins_and_lock():
+    import tomllib
+
+    from packaging.markers import Marker
+    from packaging.requirements import Requirement
+    from packaging.utils import canonicalize_name
+
+    root = Path(__file__).resolve().parent.parent
+    project = tomllib.loads((root / "pyproject.toml").read_text())["project"]
+    lock = {canonicalize_name(p["name"]): p for p in tomllib.loads((root / "uv.lock").read_text())["package"]}
+    mac = {"sys_platform": "darwin", "platform_system": "Darwin"}
+
+    pins = {}
+    for line in project["dependencies"]:
+        r = Requirement(line)
+        (spec,) = r.specifier
+        pins[canonicalize_name(r.name)] = spec.version if spec.operator == "==" else spec
+
+    closure, todo = {}, [canonicalize_name(project["name"])]
+    while todo:
+        for dep in lock[todo.pop()].get("dependencies", []):
+            name = canonicalize_name(dep["name"])
+            if "marker" in dep and not Marker(dep["marker"]).evaluate(mac):
+                continue
+            if name not in closure:
+                closure[name] = lock[name]["version"]
+                todo.append(name)
+    return project, pins, closure
+
+
+def test_pyproject_pins_match_uv_lock():
+    # uv tool install ignores uv.lock, so anything in the lock and not pinned would install unpinned.
+    _, pins, closure = _pins_and_lock()
+    assert pins == closure
+
+
+def test_release_version_is_the_same_everywhere():
+    root = Path(__file__).resolve().parent.parent
+    project, _, _ = _pins_and_lock()
+    tag = f"v{project['version']}"
+    assert f'DICTATE_VERSION="{tag}"' in (root / "scripts" / "install.sh").read_text()
+    readme = (root / "README.md").read_text()
+    assert set(re.findall(r"\bv\d+\.\d+\.\d+\b", readme)) == {tag}

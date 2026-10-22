@@ -6,4 +6,3 @@ dist/
 *.wav
 .pytest_cache/
 .ruff_cache/
-uv.lock
