@@ -237,21 +237,26 @@ async def find_region(key: str) -> str | None:
     return next((u for u, ok in zip(urls, results, strict=True) if ok is True), None)
 
 
+# Transcription session: transcribes each committed turn and never generates a reply
+INTENT = "?intent=transcription"
 SESSION = {
     "type": "session.update",
     "session": {
-        "type": "realtime",
-        # Transcripts only come with a generated reply, so ask for a minimal text one
-        "instructions": "Reply with a single period and nothing else.",
-        "output_modalities": ["text"],
-        "audio": {"input": {"format": {"type": "audio/pcm", "rate": RATE}, "turn_detection": None}},
+        "type": "transcription",
+        "audio": {
+            "input": {
+                "format": {"type": "audio/pcm", "rate": RATE},
+                "transcription": {"language": "en"},
+                "turn_detection": None,
+            }
+        },
     },
 }
 
 
 async def transcribe(chunks: asyncio.Queue, url: str, key: str) -> str:
     """Stream PCM16 chunks from the queue (None = end, CANCEL = drop) and return the transcript."""
-    async with connect(url, key) as ws:
+    async with connect(url + INTENT, key) as ws:
         await recv(ws)  # session.created
         await ws.send(json.dumps(SESSION))
         event = await recv(ws)
@@ -265,26 +270,18 @@ async def transcribe(chunks: asyncio.Queue, url: str, key: str) -> str:
                 return ""
             await ws.send(json.dumps({"type": "input_audio_buffer.append", "audio": base64.b64encode(chunk).decode()}))
         await ws.send(json.dumps({"type": "input_audio_buffer.commit"}))
-        await ws.send(json.dumps({"type": "response.create"}))
 
-        done = False
         while True:
             try:
-                # After response.done the transcript can still trail by a moment
-                event = await recv(ws, 3 if done else TIMEOUT)
+                event = await recv(ws)
             except TimeoutError:
-                if done:
-                    return ""
                 raise RuntimeError(f"no transcript after {TIMEOUT}s") from None
             t = event["type"]
             log("ws <-", t)
             if t == "conversation.item.input_audio_transcription.completed":
-                await ws.send(json.dumps({"type": "response.cancel"}))  # skip the rest of the reply
                 return event.get("transcript", "").strip()
             if t in ("error", "conversation.item.input_audio_transcription.failed"):
                 raise RuntimeError(event.get("error", {}).get("message", t))
-            if t == "response.done":
-                done = True
 
 
 def read_audio(path: str) -> bytes:
