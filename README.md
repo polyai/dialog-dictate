@@ -51,7 +51,7 @@ print(transcribe_file("memo.wav"))  # uses POLY_API_KEY or the key saved by `dic
 - **Keys belong to one host.** `dictate setup` finds yours: `studio` (self-serve) or one of the `us`, `uk` and `eu` enterprise regions.
 - **Recordings stop after 5 minutes.** Change it with `"max_minutes": 30` in `~/.config/dialog-dictate/config.json`, or `DICTATE_MAX_MINUTES`; `0` means no limit.
 - `POLY_API_KEY` and `DIALOG_REALTIME_URL` (must be `wss://`) override the saved key and region.
-- Update by running the install command above again; remove with `uv tool uninstall dialog-dictate`.
+- Update by running the install command from the [latest README](https://github.com/polyai/dialog-dictate#install); remove with `uv tool uninstall dialog-dictate`.
 
 ## Development
 
@@ -62,6 +62,6 @@ uv run ruff check . && uv run ruff format --check .
 uv tool install -e .     # `dictate` now runs your checkout
 ```
 
-To release, bump the version in `pyproject.toml`, `scripts/install.sh` and the two install lines at the top, merge, then tag the merge commit `vX.Y.Z`.
+To release, bump the version in `pyproject.toml`, `scripts/install.sh` and the two install lines at the top, merge, then a repo admin tags the merge commit `vX.Y.Z` (only admins can create `v*` tags).
 
 Everything lives in `dictate.py`. Please keep it that way: small and easy to read.

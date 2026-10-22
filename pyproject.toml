@@ -5,7 +5,7 @@ description = "Push-to-talk dictation for macOS using PolyAI Dialog-RSN-1"
 readme = "README.md"
 requires-python = ">=3.11"
 keywords = ["dictation", "speech-to-text", "push-to-talk", "macos", "polyai", "dialog-rsn-1"]
-# Exact pins, transitive included: `uv tool install` ignores uv.lock. Keep in step with it.
+# Exact pins, transitive included: `uv tool install` ignores uv.lock. A test keeps them in step.
 dependencies = [
     "websockets==17.3",
     "sounddevice==0.5.6; sys_platform == 'darwin'",

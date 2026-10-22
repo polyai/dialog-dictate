@@ -21,10 +21,12 @@ import asyncio
 import base64
 import getpass
 import json
+import math
 import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import wave
 from importlib.metadata import PackageNotFoundError, version
@@ -135,7 +137,9 @@ def max_seconds_of(cfg: dict) -> float | None:
     try:
         m = float(m)
     except (TypeError, ValueError):
-        print(f"[warn] max_minutes must be a number; using {DEFAULT_MAX_MINUTES}", flush=True)
+        m = -1
+    if not math.isfinite(m) or m < 0:
+        print(f"[warn] max_minutes must be 0 or more; using {DEFAULT_MAX_MINUTES}", flush=True)
         m = DEFAULT_MAX_MINUTES
     return m * 60 if m > 0 else None
 
@@ -597,20 +601,31 @@ class Indicator:
             self.proc = None
 
 
+def _locked(method):
+    def wrapper(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+
+    return wrapper
+
+
 class Gesture:
     """Turns hotkey presses into actions.
 
     Hold to talk, release to transcribe. Double-tap for hands-free, then tap again to
     finish; Esc cancels hands-free. Returns "start", "handsfree", "stop", "cancel" or None.
+    Locked, because the key listener thread and the asyncio loop (reset) both call it.
     """
 
     def __init__(self, clock=time.monotonic):
         self.clock = clock
+        self._lock = threading.Lock()
         self.down_at: float | None = None
         self.last_tap = float("-inf")
         self.handsfree = False
         self.ignore_release = False
 
+    @_locked
     def press(self) -> str | None:
         now = self.clock()
         if self.handsfree:  # the tap that finishes hands-free
@@ -624,6 +639,7 @@ class Gesture:
             return "handsfree"
         return "start"
 
+    @_locked
     def release(self) -> str | None:
         now, down, self.down_at = self.clock(), self.down_at, None
         if self.ignore_release:
@@ -633,6 +649,7 @@ class Gesture:
             self.last_tap = now  # maybe the first half of a double tap
         return "stop"
 
+    @_locked
     def other_key(self, escape: bool = False) -> str | None:
         self.last_tap = float("-inf")
         if self.handsfree:  # typing while hands-free carries on; Esc cancels
@@ -641,6 +658,7 @@ class Gesture:
             self.handsfree = False
         return "cancel"
 
+    @_locked
     def reset(self):
         """Forget any hold or hands-free in progress."""
         self.down_at, self.handsfree, self.ignore_release = None, False, False

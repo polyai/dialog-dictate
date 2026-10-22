@@ -3,6 +3,8 @@
 import asyncio
 import base64
 import json
+import re
+from pathlib import Path
 
 import pytest
 from websockets.asyncio.server import serve
@@ -338,6 +340,8 @@ async def test_no_time_limit_when_max_minutes_is_zero(dictator):
         ({"max_minutes": 0}, None, None),
         ({"max_minutes": 30}, "2", 120),
         ({"max_minutes": "lots"}, None, 300),
+        ({"max_minutes": -1}, None, 300),
+        ({"max_minutes": "nan"}, None, 300),
     ],
 )
 def test_max_seconds_of(cfg, env, expected, monkeypatch):
@@ -375,3 +379,48 @@ async def test_hold_to_talk_carries_on_without_the_indicator(dictator):
     assert d.stream is not None
     d.stop()
     assert stops == []
+
+
+def _pins_and_lock():
+    import tomllib
+
+    from packaging.markers import Marker
+    from packaging.requirements import Requirement
+    from packaging.utils import canonicalize_name
+
+    root = Path(__file__).resolve().parent.parent
+    project = tomllib.loads((root / "pyproject.toml").read_text())["project"]
+    lock = {canonicalize_name(p["name"]): p for p in tomllib.loads((root / "uv.lock").read_text())["package"]}
+    mac = {"sys_platform": "darwin", "platform_system": "Darwin"}
+
+    pins = {}
+    for line in project["dependencies"]:
+        r = Requirement(line)
+        (spec,) = r.specifier
+        pins[canonicalize_name(r.name)] = spec.version if spec.operator == "==" else spec
+
+    closure, todo = {}, [canonicalize_name(project["name"])]
+    while todo:
+        for dep in lock[todo.pop()].get("dependencies", []):
+            name = canonicalize_name(dep["name"])
+            if "marker" in dep and not Marker(dep["marker"]).evaluate(mac):
+                continue
+            if name not in closure:
+                closure[name] = lock[name]["version"]
+                todo.append(name)
+    return project, pins, closure
+
+
+def test_pyproject_pins_match_uv_lock():
+    # uv tool install ignores uv.lock, so anything in the lock and not pinned would install unpinned.
+    _, pins, closure = _pins_and_lock()
+    assert pins == closure
+
+
+def test_release_version_is_the_same_everywhere():
+    root = Path(__file__).resolve().parent.parent
+    project, _, _ = _pins_and_lock()
+    tag = f"v{project['version']}"
+    assert f'DICTATE_VERSION="{tag}"' in (root / "scripts" / "install.sh").read_text()
+    readme = (root / "README.md").read_text()
+    assert set(re.findall(r"\bv\d+\.\d+\.\d+\b", readme)) == {tag}
