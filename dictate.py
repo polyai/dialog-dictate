@@ -190,7 +190,7 @@ def require_wss(url: str, source: str) -> str:
     if not url.startswith("wss://"):
         raise SystemExit(f"{source} must start with wss:// (encrypted). Refusing to send your key to {url!r}.")
     host = urlparse(url).hostname or ""
-    if not (host == "poly.ai" or host.endswith(".poly.ai")) and not os.environ.get("DICTATE_ALLOW_CUSTOM_ENDPOINT"):
+    if not (host == "poly.ai" or host.endswith(".poly.ai")) and os.environ.get("DICTATE_ALLOW_CUSTOM_ENDPOINT") != "1":
         raise SystemExit(
             f"{source} points at {host!r}, which isn't a poly.ai host. Refusing to send your key there.\n"
             "If you trust it, set DICTATE_ALLOW_CUSTOM_ENDPOINT=1."
@@ -425,18 +425,22 @@ def clean(text: str) -> str:
 
 
 def frontmost_pid() -> int | None:
-    """PID of the app owning the frontmost normal window (skips the pill, which floats above)."""
+    """PID of the app with keyboard focus, i.e. the one Cmd+V will paste into.
+
+    Asks Accessibility, which pasting already needs, so floating windows like Spotlight
+    count while the non-activating pill doesn't. None if it can't tell.
+    """
     if sys.platform != "darwin":
         return None
-    import Quartz
+    import HIServices
 
-    # Ask the window server rather than NSWorkspace, whose answer goes stale without a
-    # Cocoa run loop. Windows come back front to back; layer 0 is ordinary app windows.
-    windows = Quartz.CGWindowListCopyWindowInfo(
-        Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements,
-        Quartz.kCGNullWindowID,
-    )
-    return next((w.get("kCGWindowOwnerPID") for w in windows or [] if w.get("kCGWindowLayer") == 0), None)
+    system = HIServices.AXUIElementCreateSystemWide()
+    HIServices.AXUIElementSetMessagingTimeout(system, 0.25)  # don't hang on a busy app
+    err, app = HIServices.AXUIElementCopyAttributeValue(system, HIServices.kAXFocusedApplicationAttribute, None)
+    if err or app is None:
+        return None
+    err, pid = HIServices.AXUIElementGetPid(app, None)
+    return None if err else pid
 
 
 def paste(text: str):
@@ -711,7 +715,8 @@ class Dictator:
         self.indicator = indicator
         self.on_auto_stop = on_auto_stop  # called when a recording stops without the user asking
         self.queue: asyncio.Queue | None = None
-        self.targets: dict[asyncio.Queue, int | None] = {}  # app in front when each recording stopped
+        # App in focus when each recording stopped, for recordings still being transcribed
+        self.targets: dict[asyncio.Queue, int | None] = {}
         self.stream = None
         self.started = 0.0
         self.handsfree = False
@@ -739,6 +744,7 @@ class Dictator:
         import sounddevice as sd
 
         self.queue = asyncio.Queue()
+        self.targets[self.queue] = None  # _run removes it when done, so failed runs don't leak
         self.started = time.monotonic()
         # Connect while recording so the transcript is ready soon after release
         self.loop.create_task(self._run(self.queue))
@@ -775,7 +781,8 @@ class Dictator:
         self.stream.close()
         self.stream = None
         short = time.monotonic() - self.started < MIN_SECONDS
-        self.targets[self.queue] = frontmost_pid()
+        if self.queue in self.targets:  # not if transcription already failed
+            self.targets[self.queue] = frontmost_pid()
         self.queue.put_nowait(CANCEL if cancel or short else None)
         self._show("hide" if cancel or short else "busy")
 

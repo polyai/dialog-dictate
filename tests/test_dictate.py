@@ -103,6 +103,10 @@ def test_refuses_hosts_outside_poly_ai(url):
 
 def test_custom_endpoint_needs_opt_in_and_still_wss(monkeypatch):
     assert dictate.require_wss(dictate.REGIONS["eu"], "x")
+    for not_one in ("0", "false", "yes"):
+        monkeypatch.setenv("DICTATE_ALLOW_CUSTOM_ENDPOINT", not_one)
+        with pytest.raises(SystemExit, match="poly.ai"):
+            dictate.require_wss("wss://example.com/v1/realtime", "x")
     monkeypatch.setenv("DICTATE_ALLOW_CUSTOM_ENDPOINT", "1")
     assert dictate.require_wss("wss://example.com/v1/realtime", "x")
     with pytest.raises(SystemExit, match="wss://"):
@@ -469,4 +473,17 @@ async def test_pastes_only_into_the_app_that_was_in_front_at_release(
     await asyncio.sleep(0.05)
     assert pastes == (["hello there "] if pasted else [])
     assert dictate.last_path().read_text() == "hello there"
+    assert not d.targets
+
+
+async def test_failed_transcription_leaves_no_paste_target_behind(dictator, monkeypatch):
+    d, ind, stops = dictator
+
+    async def fails(queue, url, key):
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr(dictate, "transcribe", fails)
+    d.start()
+    await asyncio.sleep(dictate.MIN_SECONDS + 0.05)  # fails while still recording
+    d.stop()
     assert not d.targets
