@@ -23,8 +23,6 @@ While it's listening, a **Listening** pill appears at the bottom of the screen; 
 
 The first run asks macOS to give **your terminal app** Microphone, Input Monitoring and Accessibility. Allow them in System Settings > Privacy & Security, then **quit the terminal with Cmd+Q and reopen it**. If something doesn't work, run `dictate doctor`.
 
-Those permissions cover everything you run in that terminal, not just `dictate`: any script or install step there could read your keystrokes or type into other apps. If you can, use a terminal app just for `dictate` (for example macOS Terminal, if you normally work in iTerm or Ghostty).
-
 ## Commands
 
 ```sh
