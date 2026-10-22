@@ -20,7 +20,7 @@ def isolate(tmp_path, monkeypatch):
     monkeypatch.setattr(dictate, "CONFIG_PATH", tmp_path / "config.json")
     monkeypatch.setattr(dictate, "keychain_get", lambda: None)
     monkeypatch.setattr(dictate, "_ALLOW_LOCAL_WS", True)
-    for var in ("POLY_API_KEY", "DIALOG_REALTIME_URL"):
+    for var in ("POLY_API_KEY", "DIALOG_REALTIME_URL", "DICTATE_ALLOW_CUSTOM_ENDPOINT"):
         monkeypatch.delenv(var, raising=False)
 
 
@@ -93,6 +93,25 @@ async def test_cancel_sends_no_commit(server):
 def test_refuses_plain_ws_to_remote_hosts():
     with pytest.raises(SystemExit, match="wss://"):
         dictate.require_wss("ws://api.us.poly.ai/v1/realtime", "x")
+
+
+@pytest.mark.parametrize("url", ["wss://poly.ai.evil.com/x", "wss://evilpoly.ai/x", "wss://example.com/v1/realtime"])
+def test_refuses_hosts_outside_poly_ai(url):
+    with pytest.raises(SystemExit, match="poly.ai"):
+        dictate.require_wss(url, "x")
+
+
+def test_custom_endpoint_needs_opt_in_and_still_wss(monkeypatch):
+    assert dictate.require_wss(dictate.REGIONS["eu"], "x")
+    monkeypatch.setenv("DICTATE_ALLOW_CUSTOM_ENDPOINT", "1")
+    assert dictate.require_wss("wss://example.com/v1/realtime", "x")
+    with pytest.raises(SystemExit, match="wss://"):
+        dictate.require_wss("ws://example.com/v1/realtime", "x")
+
+
+def test_clean_flattens_newlines_and_control_characters():
+    assert dictate.clean("hello\nrm -rf ~\r\n") == "hello rm -rf ~"
+    assert dictate.clean(" a\tb\x07c\x1b[2J ") == "a bc[2J"
 
 
 def test_resolve_order(monkeypatch):
@@ -307,6 +326,7 @@ async def dictator(monkeypatch):
         return ""
 
     monkeypatch.setattr(dictate, "transcribe", fake_transcribe)
+    monkeypatch.setattr(dictate, "frontmost_pid", lambda: None)
     stops = []
     ind = FakeIndicator()
     d = dictate.Dictator(asyncio.get_running_loop(), "wss://x", KEY, ind, on_auto_stop=lambda: stops.append(1))
@@ -424,3 +444,29 @@ def test_release_version_is_the_same_everywhere():
     assert f'DICTATE_VERSION="{tag}"' in (root / "scripts" / "install.sh").read_text()
     readme = (root / "README.md").read_text()
     assert set(re.findall(r"\bv\d+\.\d+\.\d+\b", readme)) == {tag}
+
+
+@pytest.mark.parametrize("front_at_release, front_now, pasted", [(111, 111, True), (111, 222, False)])
+async def test_pastes_only_into_the_app_that_was_in_front_at_release(
+    dictator, monkeypatch, front_at_release, front_now, pasted
+):
+    d, ind, stops = dictator
+    fronts = iter([front_at_release, front_now])
+    monkeypatch.setattr(dictate, "frontmost_pid", lambda: next(fronts))
+
+    async def says_hello(queue, url, key):
+        while await queue.get() is not None:
+            pass
+        return "hello\nthere"
+
+    monkeypatch.setattr(dictate, "transcribe", says_hello)
+    monkeypatch.setattr(dictate, "RESTORE_SECONDS", 0)
+    pastes = []
+    monkeypatch.setattr(dictate, "paste", lambda text: pastes.append(text) or (lambda: None))
+    d.start()
+    await asyncio.sleep(dictate.MIN_SECONDS + 0.05)
+    d.stop()
+    await asyncio.sleep(0.05)
+    assert pastes == (["hello there "] if pasted else [])
+    assert dictate.last_path().read_text() == "hello there"
+    assert not d.targets

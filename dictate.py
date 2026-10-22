@@ -31,6 +31,7 @@ import time
 import wave
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
+from urllib.parse import urlparse
 
 import websockets
 
@@ -181,10 +182,19 @@ def last_path() -> Path:
 
 
 def require_wss(url: str, source: str) -> str:
-    # The key travels in a header, so never send it over an unencrypted ws:// link
+    # The key travels in a header, so never send it over an unencrypted ws:// link,
+    # or to a host outside poly.ai unless the user has opted in
     local = _ALLOW_LOCAL_WS and url.startswith("ws://127.0.0.1:")
-    if not (url.startswith("wss://") or local):
+    if local:
+        return url
+    if not url.startswith("wss://"):
         raise SystemExit(f"{source} must start with wss:// (encrypted). Refusing to send your key to {url!r}.")
+    host = urlparse(url).hostname or ""
+    if not (host == "poly.ai" or host.endswith(".poly.ai")) and not os.environ.get("DICTATE_ALLOW_CUSTOM_ENDPOINT"):
+        raise SystemExit(
+            f"{source} points at {host!r}, which isn't a poly.ai host. Refusing to send your key there.\n"
+            "If you trust it, set DICTATE_ALLOW_CUSTOM_ENDPOINT=1."
+        )
     return url
 
 
@@ -409,18 +419,40 @@ def last() -> int:
     return 0
 
 
+def clean(text: str) -> str:
+    """Collapse newlines and tabs and drop control characters, so a paste can never press Enter."""
+    return "".join(c for c in " ".join(text.split()) if c.isprintable())
+
+
+def frontmost_pid() -> int | None:
+    """PID of the app owning the frontmost normal window (skips the pill, which floats above)."""
+    if sys.platform != "darwin":
+        return None
+    import Quartz
+
+    # Ask the window server rather than NSWorkspace, whose answer goes stale without a
+    # Cocoa run loop. Windows come back front to back; layer 0 is ordinary app windows.
+    windows = Quartz.CGWindowListCopyWindowInfo(
+        Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements,
+        Quartz.kCGNullWindowID,
+    )
+    return next((w.get("kCGWindowOwnerPID") for w in windows or [] if w.get("kCGWindowLayer") == 0), None)
+
+
 def paste(text: str):
     """Paste text into the frontmost app via the clipboard. Returns a function that puts the old clipboard back."""
     log("pasting", len(text), "chars")
-    from AppKit import NSPasteboard, NSPasteboardItem, NSPasteboardTypeString
+    from AppKit import NSPasteboard, NSPasteboardContentsCurrentHostOnly, NSPasteboardItem, NSPasteboardTypeString
     from pynput import keyboard
 
     pb = NSPasteboard.generalPasteboard()
     saved = [{t: item.dataForType_(t) for t in item.types()} for item in pb.pasteboardItems() or []]
-    # The transient marker asks clipboard managers not to keep a copy of every dictation
-    pb.declareTypes_owner_([NSPasteboardTypeString, "org.nspasteboard.TransientType"], None)
+    # Keep dictations off Universal Clipboard, and ask clipboard managers not to keep or
+    # show them (https://nspasteboard.org)
+    pb.prepareForNewContentsWithOptions_(NSPasteboardContentsCurrentHostOnly)
     pb.setString_forType_(text, NSPasteboardTypeString)
-    pb.setString_forType_("", "org.nspasteboard.TransientType")
+    for marker in ("org.nspasteboard.TransientType", "org.nspasteboard.ConcealedType"):
+        pb.setString_forType_("", marker)
     ours = pb.changeCount()
     kb = keyboard.Controller()
     with kb.pressed(keyboard.Key.cmd):
@@ -679,6 +711,7 @@ class Dictator:
         self.indicator = indicator
         self.on_auto_stop = on_auto_stop  # called when a recording stops without the user asking
         self.queue: asyncio.Queue | None = None
+        self.targets: dict[asyncio.Queue, int | None] = {}  # app in front when each recording stopped
         self.stream = None
         self.started = 0.0
         self.handsfree = False
@@ -742,12 +775,13 @@ class Dictator:
         self.stream.close()
         self.stream = None
         short = time.monotonic() - self.started < MIN_SECONDS
+        self.targets[self.queue] = frontmost_pid()
         self.queue.put_nowait(CANCEL if cancel or short else None)
         self._show("hide" if cancel or short else "busy")
 
     async def _run(self, queue):
         try:
-            text = await transcribe(queue, self.url, self.key)
+            text = clean(await transcribe(queue, self.url, self.key))
         except websockets.InvalidStatus as e:
             hint = " (key rejected: run `dictate setup` again)" if e.response.status_code in (401, 403) else ""
             print(f"[error] {e}{hint}", flush=True)
@@ -756,11 +790,16 @@ class Dictator:
             print(f"[error] {e}", flush=True)
             return
         finally:
+            target = self.targets.pop(queue, None)
             if not self.stream:  # don't hide the pill if a new recording has already started
                 self._show("hide")
         if text:
             print(f"→ {text!r} ({time.monotonic() - self.started:.1f}s)", flush=True)
             write_private(last_path(), text)  # for `dictate last` if the paste lands in the wrong place
+            if frontmost_pid() != target:
+                # Focus moved while transcribing; don't type into whatever is in front now
+                print("[info] you switched apps before the text was ready, so it wasn't pasted. Run `dictate last`.")
+                return
             restore = paste(text + " ")
             await asyncio.sleep(RESTORE_SECONDS)
             restore()
