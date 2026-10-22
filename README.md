@@ -50,7 +50,7 @@ print(transcribe_file("memo.wav"))  # uses POLY_API_KEY or the key saved by `dic
 - **Quick taps are ignored**, and pressing another key while holding Right Command (Cmd+Tab, say) cancels that recording.
 - **Keys belong to one host.** `dictate setup` finds yours: `studio` (self-serve) or one of the `us`, `uk` and `eu` enterprise regions.
 - **Recordings stop after 5 minutes.** Change it with `"max_minutes": 30` in `~/.config/dialog-dictate/config.json`, or `DICTATE_MAX_MINUTES`; `0` means no limit.
-- `POLY_API_KEY` and `DIALOG_REALTIME_URL` (must be `wss://`) override the saved key and region.
+- `POLY_API_KEY` and `DIALOG_REALTIME_URL` (must be `wss://` on a `poly.ai` host; set `DICTATE_ALLOW_CUSTOM_ENDPOINT=1` for any other) override the saved key and region.
 - Update by running the install command from the [latest README](https://github.com/polyai/dialog-dictate#install); remove with `uv tool uninstall dialog-dictate`.
 
 ## Development
