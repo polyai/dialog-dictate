@@ -32,25 +32,27 @@ async def server():
         mode = "happy"
         audio = b""
         keys = []
+        paths = []
+        sessions = []
 
     state = State()
 
     async def handler(ws):
         state.keys.append(ws.request.headers.get("X-API-KEY"))
+        state.paths.append(ws.request.path)
         await ws.send(json.dumps({"type": "session.created"}))
         async for raw in ws:
             event = json.loads(raw)
             t = event["type"]
             if t == "session.update":
+                state.sessions.append(event["session"])
                 await ws.send(json.dumps({"type": "session.updated"}))
             elif t == "input_audio_buffer.append":
                 state.audio += base64.b64decode(event["audio"])
-            elif t == "response.create":
+            elif t == "input_audio_buffer.commit":
                 if state.mode == "error":
                     await ws.send(json.dumps({"type": "error", "error": {"message": "boom"}}))
                     continue
-                if state.mode == "late":  # transcript arrives after response.done
-                    await ws.send(json.dumps({"type": "response.done"}))
                 await ws.send(
                     json.dumps(
                         {
@@ -72,9 +74,10 @@ async def test_transcribe_returns_stripped_text_and_sends_key_and_audio(server):
     assert server.audio == ONE_SECOND
 
 
-async def test_transcript_after_response_done(server):
-    server.mode = "late"
-    assert await dictate.transcribe_pcm(ONE_SECOND, KEY, server.url) == "hello world"
+async def test_opens_a_transcription_session(server):
+    await dictate.transcribe_pcm(ONE_SECOND, KEY, server.url)
+    assert server.paths == ["/v1/realtime?intent=transcription"]
+    assert server.sessions[0]["type"] == "transcription"
 
 
 async def test_server_error_raises(server):
