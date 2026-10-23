@@ -1,4 +1,5 @@
-# Copyright (c) 2026 PolyAI Limited. All rights reserved.
+# Copyright 2026 PolyAI Limited
+# SPDX-License-Identifier: Apache-2.0
 #
 # Push-to-talk dictation with PolyAI Dialog-RSN-1.
 # Hold Right Command (or the hotkey picked in setup), speak, then release to paste the

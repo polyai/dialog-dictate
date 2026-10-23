@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Copyright (c) 2026 PolyAI Limited. All rights reserved.
+# Copyright 2026 PolyAI Limited
+# SPDX-License-Identifier: Apache-2.0
 # Install dialog-dictate on macOS:
 #   curl -LsSf https://raw.githubusercontent.com/polyai/dialog-dictate/v0.4.0/scripts/install.sh | bash
 set -euo pipefail
