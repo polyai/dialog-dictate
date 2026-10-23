@@ -65,3 +65,7 @@ uv tool install -e .     # `dictate` now runs your checkout
 To release, bump the version in `pyproject.toml`, `scripts/install.sh` and the two install lines at the top, merge, then a repo admin tags the merge commit `vX.Y.Z` (only admins can create `v*` tags).
 
 Everything lives in `dictate.py`. Please keep it that way: small and easy to read.
+
+## License
+
+Apache-2.0. See [LICENSE](LICENSE).

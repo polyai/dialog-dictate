@@ -3,6 +3,8 @@ name = "dialog-dictate"
 version = "0.3.0"
 description = "Push-to-talk dictation for macOS using PolyAI Dialog-RSN-1"
 readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 keywords = ["dictation", "speech-to-text", "push-to-talk", "macos", "polyai", "dialog-rsn-1"]
 # Exact pins, transitive included: `uv tool install` ignores uv.lock. A test keeps them in step.
