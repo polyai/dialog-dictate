@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Copyright (c) 2026 PolyAI Limited. All rights reserved.
 # Install dialog-dictate on macOS:
-#   curl -LsSf https://raw.githubusercontent.com/polyai/dialog-dictate/v0.3.0/scripts/install.sh | bash
+#   curl -LsSf https://raw.githubusercontent.com/polyai/dialog-dictate/v0.4.0/scripts/install.sh | bash
 set -euo pipefail
 
 # Bump with each release.
-DICTATE_VERSION="v0.3.0"
+DICTATE_VERSION="v0.4.0"
 UV_VERSION="0.12.23"
 
 main() {

@@ -14,10 +14,10 @@ While it's listening, a **Listening** pill appears at the bottom of the screen; 
 2. Install and paste your key when asked:
 
    ```sh
-   curl -LsSf https://raw.githubusercontent.com/polyai/dialog-dictate/v0.3.0/scripts/install.sh | bash
+   curl -LsSf https://raw.githubusercontent.com/polyai/dialog-dictate/v0.4.0/scripts/install.sh | bash
    ```
 
-   Or by hand: `uv tool install git+https://github.com/polyai/dialog-dictate@v0.3.0 && dictate setup` (get uv with `brew install uv`).
+   Or by hand: `uv tool install git+https://github.com/polyai/dialog-dictate@v0.4.0 && dictate setup` (get uv with `brew install uv`).
 
 3. Run `dictate`, hold Right Command and talk. Ctrl+C stops it.
 
