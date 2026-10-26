@@ -333,6 +333,7 @@ def transcribe_file(path: str, api_key: str | None = None, url: str | None = Non
 
 def setup():
     cfg = load_config()
+    hotkey = hotkey_of(cfg)
     saved = keychain_get()
     print("You need a PolyAI API key from the API Keys tab of Agent Studio.")
     hint = ", Enter keeps the saved one" if saved else ""
@@ -352,13 +353,14 @@ def setup():
     if sys.platform == "darwin":
         import Quartz
 
-        current = key_label(hotkey_of(cfg))
+        current = key_label(hotkey)
         if Quartz.CGPreflightListenEventAccess():
             print(f"\nHotkey: press the key to hold while dictating (Enter keeps {current})...")
-            if hotkey := capture_key():
+            if selected := capture_key():
+                hotkey = selected
                 cfg["hotkey"] = hotkey
-            print(f"Hotkey: {key_label(hotkey_of(cfg))}")
-            if len(hotkey_of(cfg)) == 1:
+            print(f"Hotkey: {key_label(hotkey)}")
+            if len(hotkey) == 1:
                 print("Note: this key still types into the focused app. Modifiers or F13-F19 work best.")
         else:
             # Can't see key presses yet; they work after the first `dictate` run grants Input Monitoring
@@ -369,6 +371,8 @@ def setup():
 
 
 def doctor() -> int:
+    cfg = load_config()
+    hotkey = hotkey_of(cfg)
     ok = True
 
     def check(passed: bool, label: str, fix: str = ""):
@@ -383,7 +387,7 @@ def doctor() -> int:
         "API key " + ("(POLY_API_KEY)" if os.environ.get("POLY_API_KEY") else "(Keychain)"),
         "run `dictate setup`",
     )
-    url = os.environ.get("DIALOG_REALTIME_URL") or REGIONS.get(load_config().get("region", ""), REGIONS["studio"])
+    url = os.environ.get("DIALOG_REALTIME_URL") or REGIONS.get(cfg.get("region", ""), REGIONS["studio"])
     print(f"      region: {region_of(url)}")
     if key:
         check(asyncio.run(key_works(url, key)), "server accepts the key", "run `dictate setup` with a current key")
@@ -394,7 +398,7 @@ def doctor() -> int:
         fix = "System Settings > Privacy & Security, turn it on for your terminal, then quit it with Cmd+Q"
         check(Quartz.CGPreflightListenEventAccess(), "Input Monitoring", fix)
         check(HIServices.AXIsProcessTrusted(), "Accessibility", fix)
-        print(f"      hotkey: {key_label(hotkey_of(load_config()))}")
+        print(f"      hotkey: {key_label(hotkey)}")
         try:
             import sounddevice as sd
 
@@ -542,10 +546,11 @@ def run_indicator():
     label.setFont_(font)
     label.setTextColor_(rgb(0xF5F5F5))
 
+    hotkey = hotkey_of(load_config())
     brand = rgb(0xD9EE50)
     states = {  # state: (dot colour, text, pulse)
         "rec": (brand, "Listening", True),
-        "free": (brand, "Hands-free · tap ⌘ to stop", True),
+        "free": (brand, f"Hands-free · tap {key_label(hotkey)} to stop", True),
         "busy": (rgb(0x858589), "Transcribing…", False),
     }
     current = {"state": "hide"}
@@ -587,8 +592,14 @@ def run_indicator():
     def show(state: str):
         if state not in states:
             current["state"] = "hide"
-            # Only order out if nothing re-showed the pill while it was fading
-            fade(0.0, lambda: current["state"] == "hide" and panel.orderOut_(None))
+
+            # Only order out if nothing re-showed the pill while it was fading.
+            # PyObjC completion handlers must return None, never a boolean.
+            def hide_if_still_hidden():
+                if current["state"] == "hide":
+                    panel.orderOut_(None)
+
+            fade(0.0, hide_if_still_hidden)
             return
         was_hidden = current["state"] == "hide"
         current["state"] = state
@@ -632,6 +643,10 @@ class Indicator:
             self.proc.stdin.write(state + "\n")
             self.proc.stdin.flush()
         except OSError:  # helper died: carry on without it
+            try:
+                self.proc.stdin.close()
+            except OSError:
+                pass  # closing may try to flush the broken pipe again
             self.proc = None
 
 

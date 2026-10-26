@@ -157,6 +157,74 @@ def test_read_audio_passes_16k_mono_wav_through(tmp_path):
     assert dictate.read_audio(str(path)) == ONE_SECOND
 
 
+@pytest.mark.parametrize("reshown", [False, True])
+def test_indicator_hide_completion_returns_none_even_if_reshown(reshown):
+    """Exercise the actual nested callback without requiring AppKit or a display."""
+    import ast
+    import inspect
+    from types import SimpleNamespace
+
+    tree = ast.parse(inspect.getsource(dictate.run_indicator))
+    show = next(node for node in tree.body[0].body if isinstance(node, ast.FunctionDef) and node.name == "show")
+    callbacks, hidden = [], []
+    current = {"state": "rec"}
+    namespace = {
+        "states": {"rec": None},
+        "current": current,
+        "fade": lambda alpha, done: callbacks.append(done),
+        "panel": SimpleNamespace(orderOut_=lambda sender: hidden.append(sender)),
+    }
+    exec(compile(ast.Module(body=[show], type_ignores=[]), "<indicator show>", "exec"), namespace)
+    namespace["show"]("hide")
+    if reshown:
+        current["state"] = "rec"
+    assert callbacks[0]() is None  # required by the Objective-C void completion block
+    assert hidden == ([] if reshown else [None])
+
+
+@pytest.mark.parametrize(
+    "cfg, label",
+    [({}, "Right Command"), ({"hotkey": "f13"}, "f13"), ({"hotkey": "alt_r"}, "Right Option")],
+)
+def test_indicator_hands_free_hint_uses_configured_hotkey(cfg, label):
+    """Evaluate the indicator's state labels without opening a native window."""
+    import ast
+    import inspect
+
+    dictate.save_config(cfg)
+    tree = ast.parse(inspect.getsource(dictate.run_indicator))
+    assignments = [
+        node
+        for node in tree.body[0].body
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id in ("hotkey", "states") for target in node.targets)
+    ]
+    namespace = {**vars(dictate), "brand": None, "rgb": lambda color: None}
+    exec(compile(ast.Module(body=assignments, type_ignores=[]), "<indicator labels>", "exec"), namespace)
+    assert namespace["states"]["free"][1] == f"Hands-free · tap {label} to stop"
+
+
+def test_indicator_closes_broken_pipe():
+    from types import SimpleNamespace
+
+    class BrokenPipe:
+        closed = False
+
+        def write(self, text):
+            raise BrokenPipeError()
+
+        def close(self):
+            self.closed = True
+            raise BrokenPipeError()
+
+    pipe = BrokenPipe()
+    indicator = dictate.Indicator.__new__(dictate.Indicator)
+    indicator.proc = SimpleNamespace(stdin=pipe)
+    indicator.set("hide")
+    assert indicator.proc is None
+    assert pipe.closed
+
+
 class FakeClock:
     def __init__(self):
         self.t = 100.0
