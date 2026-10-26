@@ -1,12 +1,19 @@
 [project]
 name = "dialog-dictate"
-version = "0.4.0"
+version = "0.4.1"
 description = "Push-to-talk dictation for macOS using PolyAI Dialog-RSN-1"
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 requires-python = ">=3.11"
-keywords = ["dictation", "speech-to-text", "push-to-talk", "macos", "polyai", "dialog-rsn-1"]
+keywords = [
+    "dictation",
+    "speech-to-text",
+    "push-to-talk",
+    "macos",
+    "polyai",
+    "dialog-rsn-1",
+]
 # Exact pins, transitive included: `uv tool install` ignores uv.lock. A test keeps them in step.
 dependencies = [
     "websockets==17.3",
@@ -14,7 +21,7 @@ dependencies = [
     "pynput==1.8.2; sys_platform == 'darwin'",
     "pyobjc-framework-Quartz==12.2.2; sys_platform == 'darwin'",
     "pyobjc-framework-ApplicationServices==12.2.2; sys_platform == 'darwin'",
-    "pyobjc-framework-Cocoa==12.2.2; sys_platform == 'darwin'",  # on-screen indicator
+    "pyobjc-framework-Cocoa==12.2.2; sys_platform == 'darwin'",               # on-screen indicator
     # transitive
     "pyobjc-core==12.2.2; sys_platform == 'darwin'",
     "pyobjc-framework-CoreText==12.2.2; sys_platform == 'darwin'",
@@ -34,7 +41,7 @@ dictate = "dictate:main"
 dev = ["pytest>=8", "pytest-asyncio>=0.24", "ruff"]
 
 [build-system]
-requires = ["setuptools==84.0.0"]  # pinned: installs build from source
+requires = ["setuptools==84.0.0"]       # pinned: installs build from source
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
