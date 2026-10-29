@@ -41,7 +41,7 @@ dictate = "dictate:main"
 dev = ["pytest>=8", "pytest-asyncio>=0.24", "ruff"]
 
 [build-system]
-requires = ["setuptools==84.0.0"]       # pinned: installs build from source
+requires = ["setuptools==84.2.1"]       # pinned: installs build from source
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
